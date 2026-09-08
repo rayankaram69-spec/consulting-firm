@@ -1,19 +1,19 @@
 """
-AI-Powered Consulting Platform — Final Version
+AI-Powered Consulting Platform — Streamlit Web App
 Sectors: Real Estate | Corporate Finance (REAL data via yfinance) | Insurance
 Shared engine: Monte Carlo simulation + Risk-Adjusted NPV
-No PDF — results shown directly in terminal + rich matplotlib dashboards.
 
 Install first:
-    pip install numpy matplotlib yfinance
+    pip install streamlit numpy matplotlib yfinance
 
 Run:
-    python main.py
+    streamlit run app.py
 """
 
 import hashlib
 import numpy as np
 import matplotlib.pyplot as plt
+import streamlit as st
 
 try:
     import yfinance as yf
@@ -23,6 +23,7 @@ except ImportError:
 
 np.random.seed(42)
 
+st.set_page_config(page_title="AI Consulting Platform", layout="wide")
 
 # ============================================================
 # SHARED RISK ENGINE
@@ -39,21 +40,15 @@ class SimulationResult:
         prob_negative = np.mean(self.npv_samples < 0) * 100
         return {"mean": mean, "p10": p10, "p50": p50, "p90": p90, "prob_negative": prob_negative}
 
-    def print_summary(self):
-        s = self.stats()
-        print(f"\n{'='*60}")
-        print(f"  RESULT: {self.label}")
-        print(f"{'='*60}")
-        print(f"  Mean NPV (expected value):   {s['mean']:>15,.0f}")
-        print(f"  Pessimistic case (P10):      {s['p10']:>15,.0f}")
-        print(f"  Median case (P50):           {s['p50']:>15,.0f}")
-        print(f"  Optimistic case (P90):       {s['p90']:>15,.0f}")
-        print(f"  Probability of loss:         {s['prob_negative']:>14.1f}%")
-        verdict = "STRONG BUY" if s["prob_negative"] < 10 else \
-                  "FAVORABLE" if s["prob_negative"] < 25 else \
-                  "PROCEED WITH CAUTION" if s["prob_negative"] < 45 else "HIGH RISK"
-        print(f"  Verdict:                     {verdict:>15s}")
-        print(f"{'='*60}")
+    def verdict(self):
+        p = self.stats()["prob_negative"]
+        if p < 10:
+            return "STRONG BUY", "green"
+        elif p < 25:
+            return "FAVORABLE", "green"
+        elif p < 45:
+            return "PROCEED WITH CAUTION", "orange"
+        return "HIGH RISK", "red"
 
 
 def monte_carlo_npv(cashflow_generator, discount_rate, years, n_sim, label):
@@ -65,41 +60,47 @@ def monte_carlo_npv(cashflow_generator, discount_rate, years, n_sim, label):
     return SimulationResult(npvs, label)
 
 
-def show_dashboard(results: dict, main_title):
-    """Rich multi-panel matplotlib dashboard: histogram + ranking bar chart."""
-    n = len(results)
-    fig, axes = plt.subplots(1, n + 1, figsize=(6 * (n + 1), 5))
-    if n == 1:
-        axes = [axes[0], axes[1]] if isinstance(axes, np.ndarray) else axes
+def render_result_metrics(result: SimulationResult):
+    s = result.stats()
+    verdict, color = result.verdict()
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Mean NPV", f"{s['mean']:,.0f}")
+    c2.metric("Pessimistic (P10)", f"{s['p10']:,.0f}")
+    c3.metric("Median (P50)", f"{s['p50']:,.0f}")
+    c4.metric("Optimistic (P90)", f"{s['p90']:,.0f}")
+    c5.metric("Prob. of loss", f"{s['prob_negative']:.1f}%")
+    st.markdown(f"### Verdict: :{color}[{verdict}]")
 
-    colors = plt.cm.tab10(np.linspace(0, 1, n))
-    for idx, (name, result) in enumerate(results.items()):
-        ax = axes[idx] if n > 1 else axes[0]
-        ax.hist(result.npv_samples, bins=50, color=colors[idx], edgecolor="white", alpha=0.85)
-        s = result.stats()
-        ax.axvline(s["p50"], color="black", linestyle="--", linewidth=1.5, label=f"Median: {s['p50']:,.0f}")
-        ax.axvline(0, color="red", linestyle=":", linewidth=1, label="Break-even")
-        ax.set_title(name, fontsize=11, fontweight="bold")
-        ax.set_xlabel("NPV")
-        ax.legend(fontsize=8)
 
-    ranking_ax = axes[-1]
+def render_histogram(result: SimulationResult):
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.hist(result.npv_samples, bins=50, color="#3B82F6", edgecolor="white", alpha=0.85)
+    s = result.stats()
+    ax.axvline(s["p50"], color="black", linestyle="--", linewidth=1.5, label=f"Median: {s['p50']:,.0f}")
+    ax.axvline(0, color="red", linestyle=":", linewidth=1, label="Break-even")
+    ax.set_title(f"NPV distribution — {result.label}")
+    ax.set_xlabel("Net Present Value")
+    ax.set_ylabel("Frequency")
+    ax.legend()
+    st.pyplot(fig)
+
+
+def render_ranking_chart(results: dict, title):
     names = list(results.keys())
-    means = [results[n_].stats()["mean"] for n_ in names]
-    risks = [results[n_].stats()["prob_negative"] for n_ in names]
+    means = [results[n].stats()["mean"] for n in names]
+    risks = [results[n].stats()["prob_negative"] for n in names]
     order = np.argsort(means)[::-1]
     names_sorted = [names[i] for i in order]
     means_sorted = [means[i] for i in order]
     risk_sorted = [risks[i] for i in order]
     bar_colors = ["#16A34A" if r < 20 else "#F59E0B" if r < 40 else "#DC2626" for r in risk_sorted]
-    ranking_ax.barh(names_sorted, means_sorted, color=bar_colors)
-    ranking_ax.set_title(f"{main_title}\nRanked by expected NPV (green=low risk, red=high risk)",
-                          fontsize=11, fontweight="bold")
-    ranking_ax.set_xlabel("Mean NPV")
-    ranking_ax.invert_yaxis()
 
-    plt.tight_layout()
-    plt.show()
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.barh(names_sorted, means_sorted, color=bar_colors)
+    ax.set_title(f"{title} — ranked by expected NPV")
+    ax.set_xlabel("Mean NPV")
+    ax.invert_yaxis()
+    st.pyplot(fig)
 
 
 # ============================================================
@@ -146,40 +147,43 @@ def real_estate_cashflow_factory(inputs):
     return generate
 
 
-def run_real_estate_module():
-    print("\n" + "#" * 60)
-    print("#  REAL ESTATE — MULTI-SEGMENT CITY ANALYSIS")
-    print("#" * 60)
-    country = input("Country: ").strip() or "Sample Country"
-    city = input("City / village: ").strip() or "Sample City"
-    try:
-        years = int(input("Forecast horizon (years): ") or 5)
-        size_sqm = float(input("Property size (sqm): ") or 150)
-    except ValueError:
-        years, size_sqm = 5, 150
-    override = input("Known real price per sqm (Enter to auto-estimate): ").strip()
-    profile = derive_city_profile(city, country)
-    base_price = float(override) if override else profile["base_price_per_sqm"]
-    source = "REAL (user-provided)" if override else "MODEL ESTIMATE (no live data feed connected)"
+def render_real_estate():
+    st.header("Real estate — multi-segment city analysis")
+    col1, col2 = st.columns(2)
+    country = col1.text_input("Country", "Lebanon")
+    city = col2.text_input("City / village", "Baabda")
+    col3, col4 = st.columns(2)
+    years = col3.number_input("Forecast horizon (years)", min_value=1, max_value=20, value=5)
+    size_sqm = col4.number_input("Property size (sqm)", min_value=10.0, value=150.0)
+    override = st.text_input("Known real price per sqm (leave blank to auto-estimate)", "")
 
-    print(f"\nCity: {city}, {country}  |  Base price/sqm: {base_price:,.0f}  |  Source: {source}")
+    if st.button("Run real estate analysis", type="primary"):
+        profile = derive_city_profile(city, country)
+        base_price = float(override) if override else profile["base_price_per_sqm"]
+        source = "REAL (user-provided)" if override else "MODEL ESTIMATE — no live data feed connected"
+        st.info(f"City: **{city}, {country}**  |  Base price/sqm: **{base_price:,.0f}**  |  Source: **{source}**")
 
-    results = {}
-    for seg_name, seg in REAL_ESTATE_SEGMENTS.items():
-        seg_price = base_price * seg["price_multiplier"]
-        inputs = {
-            "price_per_sqm": seg_price, "size_sqm": size_sqm, "rental_yield": seg["rental_yield"],
-            "growth_low": seg["growth_low"], "growth_mid": seg["growth_mid"], "growth_high": seg["growth_high"],
-            "macro_adj": profile["macro_growth_adj"], "volatility": seg["volatility"] * profile["volatility_mult"],
-            "years": years,
-        }
-        result = monte_carlo_npv(real_estate_cashflow_factory(inputs), 0.08, years, 3000, seg_name)
-        result.print_summary()
-        results[seg_name] = result
+        results = {}
+        for seg_name, seg in REAL_ESTATE_SEGMENTS.items():
+            seg_price = base_price * seg["price_multiplier"]
+            inputs = {
+                "price_per_sqm": seg_price, "size_sqm": size_sqm, "rental_yield": seg["rental_yield"],
+                "growth_low": seg["growth_low"], "growth_mid": seg["growth_mid"], "growth_high": seg["growth_high"],
+                "macro_adj": profile["macro_growth_adj"], "volatility": seg["volatility"] * profile["volatility_mult"],
+                "years": years,
+            }
+            results[seg_name] = monte_carlo_npv(real_estate_cashflow_factory(inputs), 0.08, years, 3000, seg_name)
 
-    best = max(results.items(), key=lambda kv: kv[1].stats()["mean"])
-    print(f"\n>>> BEST OPTION: {best[0]} in {city}, {country} <<<\n")
-    show_dashboard(results, f"Real Estate — {city}, {country}")
+        best_name = max(results.items(), key=lambda kv: kv[1].stats()["mean"])[0]
+        st.success(f"Best expected option: **{best_name}**")
+
+        render_ranking_chart(results, f"Real estate — {city}, {country}")
+
+        tabs = st.tabs(list(results.keys()))
+        for tab, (name, result) in zip(tabs, results.items()):
+            with tab:
+                render_result_metrics(result)
+                render_histogram(result)
 
 
 # ============================================================
@@ -223,51 +227,53 @@ def corporate_finance_cashflow_factory(inputs):
     return generate
 
 
-def run_corporate_finance_module():
-    print("\n" + "#" * 60)
-    print("#  CORPORATE FINANCE — EARNINGS & INVESTMENT FORECAST")
-    print("#" * 60)
+def render_corporate_finance():
+    st.header("Corporate finance — earnings & investment forecast")
+
     use_real = False
+    inputs_base = None
     company_label = "Sample Co."
 
     if YFINANCE_AVAILABLE:
-        ticker = input("Stock ticker for REAL data (e.g. AAPL, MSFT, TSLA): ").strip().upper()
-        if ticker:
-            print("Fetching real financial data from Yahoo Finance...")
-            real_data = fetch_real_company_data(ticker)
+        ticker = st.text_input("Stock ticker for REAL data (e.g. AAPL, MSFT, TSLA)", "")
+        if ticker and st.button("Fetch real financial data"):
+            with st.spinner("Fetching from Yahoo Finance..."):
+                real_data = fetch_real_company_data(ticker.upper())
             if real_data:
-                use_real = True
-                company_label = ticker
-                inputs_base = real_data
-                print(f"  [REAL DATA] Revenue: {real_data['current_revenue']:,.0f}")
-                print(f"  [REAL DATA] Avg historical growth: {real_data['revenue_growth']*100:.1f}%")
-                print(f"  [REAL DATA] Avg net margin: {real_data['net_margin']*100:.1f}%")
+                st.session_state["real_data"] = real_data
+                st.session_state["company_label"] = ticker.upper()
+                st.success(f"Loaded real data for {ticker.upper()}")
+                st.write(f"Revenue: {real_data['current_revenue']:,.0f} | "
+                         f"Avg growth: {real_data['revenue_growth']*100:.1f}% | "
+                         f"Avg margin: {real_data['net_margin']*100:.1f}%")
             else:
-                print("Could not fetch data for that ticker — falling back to manual input.")
+                st.error("Could not fetch data for that ticker.")
     else:
-        print("(yfinance not installed — run: pip install yfinance)")
+        st.warning("yfinance not installed — run: pip install yfinance")
 
+    if "real_data" in st.session_state:
+        use_real = True
+        inputs_base = st.session_state["real_data"]
+        company_label = st.session_state["company_label"]
+
+    st.divider()
+    st.subheader("Or enter manually")
     if not use_real:
-        company_label = input("Company name: ") or "Sample Co."
-        try:
-            current_revenue = float(input("Current annual revenue: ") or 1_000_000)
-            net_margin = float(input("Current net margin (e.g. 0.1): ") or 0.10)
-            growth_rate = float(input("Expected annual revenue growth (e.g. 0.05): ") or 0.05)
-        except ValueError:
-            current_revenue, net_margin, growth_rate = 1_000_000, 0.10, 0.05
+        company_label = st.text_input("Company name", "Sample Co.")
+        current_revenue = st.number_input("Current annual revenue", min_value=0.0, value=1_000_000.0)
+        net_margin = st.number_input("Current net margin (e.g. 0.1 for 10%)", min_value=0.0, max_value=1.0, value=0.10)
+        growth_rate = st.number_input("Expected annual revenue growth", min_value=-1.0, max_value=2.0, value=0.05)
         inputs_base = {"current_revenue": current_revenue, "net_margin": net_margin,
                         "revenue_growth": growth_rate, "growth_volatility": 0.03}
 
-    try:
-        investment_amount = float(input("Planned investment amount: ") or 100_000)
-    except ValueError:
-        investment_amount = 100_000
+    investment_amount = st.number_input("Planned investment amount", min_value=0.0, value=100_000.0)
 
-    inputs = {**inputs_base, "investment_amount": investment_amount, "years": 5}
-    result = monte_carlo_npv(corporate_finance_cashflow_factory(inputs), 0.10, inputs["years"], 5000,
-                              f"Corporate Finance: {company_label}")
-    result.print_summary()
-    show_dashboard({company_label: result}, f"Investment case — {company_label}")
+    if st.button("Run corporate finance analysis", type="primary"):
+        inputs = {**inputs_base, "investment_amount": investment_amount, "years": 5}
+        result = monte_carlo_npv(corporate_finance_cashflow_factory(inputs), 0.10, 5, 5000,
+                                  f"Corporate Finance: {company_label}")
+        render_result_metrics(result)
+        render_histogram(result)
 
 
 # ============================================================
@@ -291,55 +297,44 @@ def insurance_cashflow_factory(inputs):
     return generate
 
 
-def run_insurance_module():
-    print("\n" + "#" * 60)
-    print("#  INSURANCE — AI CLAIMS TRIAGE BUSINESS CASE")
-    print("#" * 60)
-    try:
-        annual_claims = float(input("Annual number of claims: ") or 50000)
-        cost_per_claim = float(input("Current avg processing cost per claim: ") or 40)
-        avg_claim_value = float(input("Average claim value: ") or 2000)
-        implementation_cost = float(input("Implementation cost: ") or 300000)
-    except ValueError:
-        annual_claims, cost_per_claim, avg_claim_value, implementation_cost = 50000, 40, 2000, 300000
+def render_insurance():
+    st.header("Insurance — AI claims triage business case")
+    col1, col2 = st.columns(2)
+    annual_claims = col1.number_input("Annual number of claims", min_value=0.0, value=50000.0)
+    cost_per_claim = col2.number_input("Current avg processing cost per claim", min_value=0.0, value=40.0)
+    col3, col4 = st.columns(2)
+    avg_claim_value = col3.number_input("Average claim value", min_value=0.0, value=2000.0)
+    implementation_cost = col4.number_input("Implementation cost", min_value=0.0, value=300000.0)
 
-    inputs = {
-        "annual_claims": annual_claims, "cost_per_claim": cost_per_claim, "avg_claim_value": avg_claim_value,
-        "implementation_cost": implementation_cost, "maintenance_cost": implementation_cost * 0.1,
-        "target_adoption": 0.6, "efficiency_gain": 0.25, "max_fraud_reduction": 0.15, "years": 5,
-    }
-    result = monte_carlo_npv(insurance_cashflow_factory(inputs), 0.09, inputs["years"], 5000,
-                              "Insurance: AI Claims Triage")
-    result.print_summary()
-    show_dashboard({"AI Claims Triage": result}, "Insurance — AI Claims Triage")
+    if st.button("Run insurance analysis", type="primary"):
+        inputs = {
+            "annual_claims": annual_claims, "cost_per_claim": cost_per_claim, "avg_claim_value": avg_claim_value,
+            "implementation_cost": implementation_cost, "maintenance_cost": implementation_cost * 0.1,
+            "target_adoption": 0.6, "efficiency_gain": 0.25, "max_fraud_reduction": 0.15, "years": 5,
+        }
+        result = monte_carlo_npv(insurance_cashflow_factory(inputs), 0.09, 5, 5000, "Insurance: AI Claims Triage")
+        render_result_metrics(result)
+        render_histogram(result)
 
 
 # ============================================================
-# MAIN MENU
+# MAIN APP LAYOUT
 # ============================================================
 
 def main():
-    print("=" * 60)
-    print("   AI CONSULTING PLATFORM — RISK-ADJUSTED DECISION ENGINE")
-    print("=" * 60)
-    print("  1. Real Estate — multi-segment city analysis")
-    print("  2. Corporate Finance — REAL data via stock ticker")
-    print("  3. Insurance — AI claims triage business case")
-    print("  0. Exit")
+    st.sidebar.title("AI Consulting Platform")
+    st.sidebar.caption("Risk-adjusted decision engine")
+    sector = st.sidebar.radio("Choose a sector", ["Real Estate", "Corporate Finance", "Insurance"])
 
-    while True:
-        choice = input("\nSelect a sector (0-3): ").strip()
-        if choice == "1":
-            run_real_estate_module()
-        elif choice == "2":
-            run_corporate_finance_module()
-        elif choice == "3":
-            run_insurance_module()
-        elif choice == "0":
-            print("Exiting platform.")
-            break
-        else:
-            print("Invalid choice, try again.")
+    st.title("AI Consulting Platform")
+    st.caption("Monte Carlo simulation + risk-adjusted NPV across three sectors")
+
+    if sector == "Real Estate":
+        render_real_estate()
+    elif sector == "Corporate Finance":
+        render_corporate_finance()
+    elif sector == "Insurance":
+        render_insurance()
 
 
 if __name__ == "__main__":
